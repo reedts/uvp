@@ -2,8 +2,12 @@ use atom_syndication;
 use reqwest;
 use rss;
 use rusqlite::{params, Connection};
-use std::path::{Path, PathBuf};
+use std::{
+    convert::{TryFrom, TryInto},
+    path::{Path, PathBuf},
+};
 use structopt::StructOpt;
+use unsegen::base::Color;
 
 mod data;
 mod feeds;
@@ -135,6 +139,7 @@ pub enum Error {
     RSS(rss::Error),
     Atom(atom_syndication::Error),
     DB(rusqlite::Error),
+    Config(config::ConfigError),
 }
 
 impl From<reqwest::Error> for Error {
@@ -155,6 +160,11 @@ impl From<atom_syndication::Error> for Error {
 impl From<rusqlite::Error> for Error {
     fn from(error: rusqlite::Error) -> Self {
         Error::DB(error)
+    }
+}
+impl From<config::ConfigError> for Error {
+    fn from(error: config::ConfigError) -> Self {
+        Error::Config(error)
     }
 }
 
@@ -217,19 +227,64 @@ fn refresh(conn: &Connection) -> Result<(), rusqlite::Error> {
     }
     Ok(())
 }
+
+struct Theme {
+    primary_fg: Color,
+    primary_bg: Color,
+    alt_fg: Color,
+    alt_bg: Color,
+}
+
+impl Default for Theme {
+    fn default() -> Self {
+        Theme {
+            primary_fg: Color::White,
+            primary_bg: Color::Ansi(255),
+            alt_fg: Color::White,
+            alt_bg: Color::Black,
+        }
+    }
+}
+
+impl TryFrom<config::Map<String, config::Value>> for Theme {
+    type Error = Error;
+
+    fn try_from(value: config::Map<String, config::Value>) -> Result<Self, Self::Error> {
+        const KEYS: &'static [&str] = &["primary_fg", "primary_bg", "alt_fg", "alt_bg"];
+
+        let mut theme = Theme::default();
+
+        for key in KEYS {
+            if let Ok(v) = value
+                .get(*key)
+                .ok_or(config::ConfigError::NotFound(key.to_string()))
+                .and_then(|v| v.clone().into_uint())
+            {
+                match *key {
+                    "primary_fg" => theme.primary_fg = Color::Ansi(v as u8),
+                    "primary_bg" => theme.primary_bg = Color::Ansi(v as u8),
+                    "alt_fg" => theme.alt_fg = Color::Ansi(v as u8),
+                    "alt_bg" => theme.alt_bg = Color::Ansi(v as u8),
+                    _ => continue,
+                }
+            }
+        }
+
+        Ok(theme)
+    }
+}
+
 fn main() -> Result<(), Error> {
-    let mut settings = config::Config::default();
     let default_db_path = dirs::data_dir()
         .unwrap_or(Path::new("./").to_owned())
         .join(DB_NAME);
 
-    settings
+    let mut settings_builder = config::Config::builder()
         .set_default(
             DB_FILE_CONFIG_KEY,
             default_db_path.to_string_lossy().as_ref(),
-        )
-        .unwrap();
-    settings.set_default(MPV_BINARY_CONFIG_KEY, "mpv").unwrap();
+        )?
+        .set_default(MPV_BINARY_CONFIG_KEY, "mpv")?;
 
     for config_location in vec![
         Some(PathBuf::from("/etc")),
@@ -239,16 +294,20 @@ fn main() -> Result<(), Error> {
         if let Some(config_location) = config_location {
             let config_file = config_location.join(CONFIG_FILE_NAME);
             if config_file.is_file() {
-                let config_file_name = config_file.to_string_lossy();
-                if let Err(e) = settings.merge(config::File::with_name(&config_file_name)) {
-                    panic!("Failed to load config file {}: {:?}", config_file_name, e);
-                }
+                settings_builder = settings_builder.add_source(config::File::new(
+                    config_file.to_str().unwrap(),
+                    config::FileFormat::Toml,
+                ));
             }
         }
     }
 
-    let db_path = settings.get_str(DB_FILE_CONFIG_KEY).unwrap();
-    let mpv_binary = settings.get_str(MPV_BINARY_CONFIG_KEY).unwrap();
+    let settings = settings_builder.build()?;
+
+    let db_path = settings.get_string(DB_FILE_CONFIG_KEY).unwrap();
+    let mpv_binary = settings.get_string(MPV_BINARY_CONFIG_KEY).unwrap();
+
+    let theme: Theme = settings.get_table("theme")?.try_into()?;
 
     //let flags = OpenFlags::SQLITE_OPEN_FULL_MUTEX;
     //let conn = Connection::open_with_flags(db_path, flags).unwrap();
@@ -351,7 +410,7 @@ fn main() -> Result<(), Error> {
             refresh(&conn)?;
         }
         Options::Tui => {
-            tui::run(&conn, &mpv_binary)?;
+            tui::run(&conn, &mpv_binary, &theme)?;
         }
     }
     Ok(())
