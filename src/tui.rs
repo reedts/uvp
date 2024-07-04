@@ -187,7 +187,16 @@ impl Container<<Tui<'_> as ContainerProvider>::Context> for ActiveTable<'_> {
                 ))
                 .col_separation(SeparatingStyle::Draw(
                     GraphemeCluster::try_from('|').unwrap(),
-                )),
+                ))
+                .with_window(move |mut w, _| {
+                    w.set_default_style(
+                        StyleModifier::new()
+                            .fg_color(self.theme.primary_fg)
+                            .bg_color(self.theme.primary_bg)
+                            .apply_to_default(),
+                    );
+                    w
+                }),
         )
     }
 }
@@ -311,12 +320,21 @@ impl Container<<Tui<'_> as ContainerProvider>::Context> for AvailableTable<'_> {
                 .as_widget()
                 .row_separation(SeparatingStyle::AlternatingStyle(
                     StyleModifier::new()
-                        .bg_color(self.theme.primary_bg)
-                        .fg_color(self.theme.primary_fg),
+                        .bg_color(self.theme.alt_bg)
+                        .fg_color(self.theme.alt_fg),
                 ))
                 .col_separation(SeparatingStyle::Draw(
                     GraphemeCluster::try_from('|').unwrap(),
-                )),
+                ))
+                .with_window(move |mut w, _| {
+                    w.set_default_style(
+                        StyleModifier::new()
+                            .fg_color(self.theme.primary_fg)
+                            .bg_color(self.theme.primary_bg)
+                            .apply_to_default(),
+                    );
+                    w
+                }),
         )
     }
 }
